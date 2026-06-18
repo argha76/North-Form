@@ -1,4 +1,28 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  BufferAttribute,
+  BufferGeometry,
+  Color,
+  DirectionalLight,
+  DoubleSide,
+  Group,
+  HemisphereLight,
+  IcosahedronGeometry,
+  Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  PerspectiveCamera,
+  PointLight,
+  Points,
+  PointsMaterial,
+  Scene,
+  ShaderMaterial,
+  SphereGeometry,
+  TorusGeometry,
+  TorusKnotGeometry,
+  Vector2,
+  WebGLRenderer,
+} from "three";
 
 const products = [
   {
@@ -58,14 +82,363 @@ const editorialImages = [
   },
 ];
 
+const lookbookFrames = [
+  {
+    number: "01",
+    title: "Transit",
+    subtitle: "Between places",
+    copy: "Soft armour for the hours when the city changes shape.",
+    image:
+      "https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=1600&q=90",
+    alt: "Editorial fashion models in sculptural clothing",
+  },
+  {
+    number: "02",
+    title: "Signal",
+    subtitle: "After dark",
+    copy: "Reflective details, compact layers, and silhouettes that hold their ground.",
+    image:
+      "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1600&q=90",
+    alt: "Portrait from the North Form campaign",
+  },
+  {
+    number: "03",
+    title: "Static",
+    subtitle: "Beyond season",
+    copy: "A permanent uniform built from texture, restraint, and deliberate imbalance.",
+    image:
+      "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1600&q=90",
+    alt: "Streetwear editorial photographed outdoors",
+  },
+];
+
 const Arrow = ({ diagonal = false }) => (
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <path d={diagonal ? "M5 19 19 5M8 5h11v11" : "M5 12h14M14 7l5 5-5 5"} />
   </svg>
 );
 
+function AmbientCanvas() {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const context = canvas.getContext("2d");
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let width = 0;
+    let height = 0;
+    let dpr = 1;
+    let frame = 0;
+    const pointer = { x: -1000, y: -1000 };
+    let particles = [];
+
+    const resize = () => {
+      width = canvas.clientWidth;
+      height = canvas.clientHeight;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      particles = Array.from({ length: width < 700 ? 24 : 46 }, (_, index) => ({
+        x: (index * 137.5) % Math.max(width, 1),
+        y: (index * 83.7) % Math.max(height, 1),
+        vx: Math.sin(index * 1.7) * 0.16,
+        vy: Math.cos(index * 1.3) * 0.16,
+        size: index % 5 === 0 ? 2 : 1,
+      }));
+    };
+
+    const onPointerMove = (event) => {
+      const bounds = canvas.getBoundingClientRect();
+      pointer.x = event.clientX - bounds.left;
+      pointer.y = event.clientY - bounds.top;
+    };
+
+    const draw = () => {
+      context.clearRect(0, 0, width, height);
+      particles.forEach((particle, index) => {
+        const dx = pointer.x - particle.x;
+        const dy = pointer.y - particle.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < 190 && distance > 1) {
+          particle.vx -= (dx / distance) * 0.006;
+          particle.vy -= (dy / distance) * 0.006;
+        }
+        particle.vx *= 0.992;
+        particle.vy *= 0.992;
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        if (particle.x < -20) particle.x = width + 20;
+        if (particle.x > width + 20) particle.x = -20;
+        if (particle.y < -20) particle.y = height + 20;
+        if (particle.y > height + 20) particle.y = -20;
+
+        context.beginPath();
+        context.fillStyle = `rgba(16,16,16,${particle.size === 2 ? 0.28 : 0.14})`;
+        context.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+        context.fill();
+
+        for (let neighborIndex = index + 1; neighborIndex < particles.length; neighborIndex += 1) {
+          const neighbor = particles[neighborIndex];
+          const lineDistance = Math.hypot(neighbor.x - particle.x, neighbor.y - particle.y);
+          if (lineDistance < 95) {
+            context.beginPath();
+            context.strokeStyle = `rgba(16,16,16,${0.07 * (1 - lineDistance / 95)})`;
+            context.moveTo(particle.x, particle.y);
+            context.lineTo(neighbor.x, neighbor.y);
+            context.stroke();
+          }
+        }
+      });
+      if (!reducedMotion) frame = window.requestAnimationFrame(draw);
+    };
+
+    resize();
+    draw();
+    window.addEventListener("resize", resize);
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("pointermove", onPointerMove);
+    };
+  }, []);
+
+  return <canvas className="ambient-canvas" ref={canvasRef} aria-hidden="true" />;
+}
+
+const fabricVertexShader = `
+  uniform float uTime;
+  uniform float uScroll;
+  uniform float uPulse;
+  uniform vec2 uPointer;
+  varying vec3 vWorldPosition;
+  varying vec3 vWorldNormal;
+  varying float vWave;
+
+  void main() {
+    vec3 transformed = position;
+    float waveA = sin(position.y * 6.0 + uTime * 1.35 + uScroll * 9.0) * 0.065;
+    float waveB = cos(position.x * 7.0 - uTime * 0.85 - uScroll * 5.0) * 0.045;
+    float radial = length(position.xy - uPointer * 0.38);
+    float ripple = sin(radial * 18.0 - uTime * 4.0) * exp(-radial * 2.6) * uPulse * 0.11;
+    vWave = waveA + waveB + ripple;
+    transformed += normal * vWave;
+    vec4 worldPosition = modelMatrix * vec4(transformed, 1.0);
+    vWorldPosition = worldPosition.xyz;
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+  }
+`;
+
+const fabricFragmentShader = `
+  uniform float uTime;
+  uniform float uScroll;
+  uniform float uXray;
+  uniform vec3 uColorA;
+  uniform vec3 uColorB;
+  varying vec3 vWorldPosition;
+  varying vec3 vWorldNormal;
+  varying float vWave;
+
+  void main() {
+    vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+    float fresnel = pow(1.0 - abs(dot(normalize(vWorldNormal), viewDirection)), 2.5);
+    float scan = sin((vWorldPosition.y + vWorldPosition.x * 0.24) * 34.0 - uTime * 2.2) * 0.5 + 0.5;
+    float micro = sin(vWorldPosition.x * 92.0 + vWorldPosition.y * 71.0) * 0.5 + 0.5;
+    float spectral = clamp(fresnel * 0.9 + vWave * 2.4 + uScroll * 0.12, 0.0, 1.0);
+    vec3 fabric = mix(uColorA, uColorB, spectral);
+    fabric += fresnel * vec3(0.45, 0.55, 0.68);
+    fabric += scan * 0.055 + micro * 0.018;
+    vec3 xray = mix(vec3(0.005, 0.02, 0.025), vec3(0.24, 1.0, 0.96), fresnel + scan * 0.18);
+    vec3 finalColor = mix(fabric, xray, uXray);
+    float alpha = mix(0.94, 0.76 + fresnel * 0.24, uXray);
+    gl_FragColor = vec4(finalColor, alpha);
+  }
+`;
+
+function ThreeWorld({ xrayMode = false }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let renderer;
+    try {
+      renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "high-performance" });
+    } catch {
+      canvas.dataset.webgl = "unavailable";
+      return undefined;
+    }
+
+    const scene = new Scene();
+    const camera = new PerspectiveCamera(38, 1, 0.1, 100);
+    camera.position.set(0, 0, 5.4);
+    const world = new Group();
+    scene.add(world);
+
+    const mobile = window.innerWidth < 700;
+    const sculptureGeometry = new SphereGeometry(1.05, mobile ? 34 : 54, mobile ? 24 : 40);
+    const shaderUniforms = {
+      uTime: { value: 0 },
+      uScroll: { value: 0 },
+      uPulse: { value: 0 },
+      uPointer: { value: new Vector2(0, 0) },
+      uXray: { value: xrayMode ? 1 : 0 },
+      uColorA: { value: new Color(0xdfff45) },
+      uColorB: { value: new Color(0x9fa8ff) },
+    };
+    const sculptureMaterial = new ShaderMaterial({
+      uniforms: shaderUniforms,
+      vertexShader: fabricVertexShader,
+      fragmentShader: fabricFragmentShader,
+      transparent: true,
+      side: DoubleSide,
+      wireframe: xrayMode,
+    });
+    const sculpture = new Mesh(sculptureGeometry, sculptureMaterial);
+    sculpture.scale.set(1.25, 1.6, 0.72);
+    world.add(sculpture);
+
+    const cageGeometry = new IcosahedronGeometry(1.55, 2);
+    const cageMaterial = new MeshBasicMaterial({ color: 0x101010, wireframe: true, transparent: true, opacity: 0.13 });
+    const cage = new Mesh(cageGeometry, cageMaterial);
+    cage.scale.set(1, 1.18, 1);
+    world.add(cage);
+
+    const knotGeometry = new TorusKnotGeometry(1.35, 0.028, mobile ? 100 : 180, 8, 2, 3);
+    const knotMaterial = new MeshStandardMaterial({ color: 0x111111, metalness: 0.86, roughness: 0.2 });
+    const knot = new Mesh(knotGeometry, knotMaterial);
+    knot.rotation.x = Math.PI * 0.5;
+    world.add(knot);
+
+    const ringMaterial = new MeshBasicMaterial({ color: 0x101010, transparent: true, opacity: 0.24 });
+    const rings = [0, 1, 2].map((index) => {
+      const geometry = new TorusGeometry(1.88 + index * 0.22, 0.008, 6, 160);
+      const ring = new Mesh(geometry, ringMaterial);
+      ring.rotation.set(index * 0.72, index * 0.48, index * 0.9);
+      world.add(ring);
+      return ring;
+    });
+
+    const particleCount = mobile ? 130 : 320;
+    const particlePositions = new Float32Array(particleCount * 3);
+    for (let index = 0; index < particleCount; index += 1) {
+      const radius = 2.4 + ((index * 19) % 100) / 32;
+      const angle = index * 2.39996;
+      particlePositions[index * 3] = Math.cos(angle) * radius;
+      particlePositions[index * 3 + 1] = Math.sin(angle * 1.31) * radius * 0.7;
+      particlePositions[index * 3 + 2] = Math.sin(angle) * radius - 2;
+    }
+    const particleGeometry = new BufferGeometry();
+    particleGeometry.setAttribute("position", new BufferAttribute(particlePositions, 3));
+    const particleMaterial = new PointsMaterial({ color: 0x101010, size: mobile ? 0.018 : 0.024, transparent: true, opacity: 0.32 });
+    const particles = new Points(particleGeometry, particleMaterial);
+    scene.add(particles);
+
+    const ambient = new HemisphereLight(0xffffff, 0x666666, 2.1);
+    const keyLight = new DirectionalLight(0xffffff, 3.5);
+    keyLight.position.set(3, 4, 5);
+    const pointerLight = new PointLight(0xdfff45, 12, 8);
+    pointerLight.position.set(-2, 1, 3);
+    scene.add(ambient, keyLight, pointerLight);
+
+    const pointer = { x: 0, y: 0 };
+    const scroll = { target: 0, current: 0 };
+    let frame = 0;
+    const startedAt = window.performance.now();
+    const lime = new Color(0xdfff45);
+    const violet = new Color(0x9fa8ff);
+
+    const onPointerMove = (event) => {
+      pointer.x = event.clientX / window.innerWidth - 0.5;
+      pointer.y = event.clientY / window.innerHeight - 0.5;
+    };
+    const onScroll = () => {
+      const distance = Math.max(document.documentElement.scrollHeight - window.innerHeight, 1);
+      scroll.target = window.scrollY / distance;
+    };
+    const resize = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobile ? 1.2 : 1.55));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    };
+    const render = () => {
+      const elapsed = (window.performance.now() - startedAt) / 1000;
+      scroll.current += (scroll.target - scroll.current) * 0.055;
+      const positions = sculptureGeometry.attributes.position;
+      for (let index = 0; index < positions.count; index += 1) {
+        const offset = index * 3;
+        const x = basePositions[offset];
+        const y = basePositions[offset + 1];
+        const z = basePositions[offset + 2];
+        const wave = Math.sin(x * 4.2 + elapsed * 1.1) * 0.055 + Math.cos(y * 5.1 - elapsed * 0.82) * 0.045;
+        const scale = 1 + wave;
+        positions.setXYZ(index, x * scale, y * scale, z * scale);
+      }
+      positions.needsUpdate = true;
+      sculptureGeometry.computeVertexNormals();
+      sculptureMaterial.color.lerpColors(lime, violet, Math.sin(scroll.current * Math.PI) * 0.72);
+      world.rotation.y = elapsed * 0.12 + scroll.current * Math.PI * 4 + pointer.x * 0.45;
+      world.rotation.x = Math.sin(elapsed * 0.25) * 0.1 + scroll.current * 0.9 + pointer.y * 0.3;
+      world.rotation.z = Math.sin(scroll.current * Math.PI * 3) * 0.22;
+      world.position.x = Math.sin(scroll.current * Math.PI * 5) * 0.78 + pointer.x * 0.32;
+      world.position.y = Math.cos(scroll.current * Math.PI * 3) * 0.34 - (scroll.current - 0.5) * 0.9 - pointer.y * 0.22;
+      const worldScale = 1 - Math.sin(scroll.current * Math.PI) * 0.18;
+      world.scale.setScalar(worldScale);
+      cage.rotation.x = -elapsed * 0.08;
+      cage.rotation.z = elapsed * 0.06;
+      knot.rotation.z = elapsed * 0.16 - scroll.current * Math.PI * 2;
+      rings.forEach((ring, index) => {
+        ring.rotation.x += 0.0007 * (index + 1);
+        ring.rotation.y -= 0.0005 * (index + 1);
+      });
+      particles.rotation.y = elapsed * 0.018 + scroll.current * 1.8;
+      particles.rotation.x = pointer.y * 0.1;
+      pointerLight.position.x += (pointer.x * 5 - pointerLight.position.x) * 0.05;
+      pointerLight.position.y += (-pointer.y * 4 - pointerLight.position.y) * 0.05;
+      camera.position.z = 5.4 - Math.sin(scroll.current * Math.PI) * 0.75;
+      renderer.render(scene, camera);
+      canvas.dataset.webgl = "ready";
+      if (!reducedMotion) frame = window.requestAnimationFrame(render);
+    };
+
+    resize();
+    onScroll();
+    render();
+    window.addEventListener("resize", resize);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("pointermove", onPointerMove);
+      sculptureGeometry.dispose();
+      sculptureMaterial.dispose();
+      cageGeometry.dispose();
+      cageMaterial.dispose();
+      knotGeometry.dispose();
+      knotMaterial.dispose();
+      rings.forEach((ring) => ring.geometry.dispose());
+      ringMaterial.dispose();
+      particleGeometry.dispose();
+      particleMaterial.dispose();
+      renderer.dispose();
+    };
+  }, []);
+
+  return <canvas className="three-world" ref={canvasRef} aria-hidden="true" />;
+}
+
 function App() {
   const [loading, setLoading] = useState(true);
+  const [loadCount, setLoadCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [cart, setCart] = useState([]);
@@ -74,24 +447,54 @@ function App() {
   const [scrolled, setScrolled] = useState(false);
   const [toast, setToast] = useState("");
   const [email, setEmail] = useState("");
+  const [activeLook, setActiveLook] = useState(0);
+  const [showroomAngle, setShowroomAngle] = useState(0);
   const cursorRef = useRef(null);
   const productRailRef = useRef(null);
+  const lookbookRef = useRef(null);
+  const showroomDragRef = useRef({ active: false, moved: false, startX: 0, startAngle: 0 });
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setLoading(false), 1450);
-    return () => window.clearTimeout(timer);
+    let frame = 0;
+    let finishTimer = 0;
+    const startedAt = window.performance.now();
+    const animateLoader = (now) => {
+      const progress = Math.min((now - startedAt) / 1350, 1);
+      const eased = 1 - Math.pow(1 - progress, 4);
+      setLoadCount(Math.round(eased * 100));
+      if (progress < 1) frame = window.requestAnimationFrame(animateLoader);
+      else finishTimer = window.setTimeout(() => setLoading(false), 160);
+    };
+    frame = window.requestAnimationFrame(animateLoader);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(finishTimer);
+    };
   }, []);
 
   useEffect(() => {
     let raf = 0;
+    let previousY = window.scrollY;
     const onScroll = () => {
       if (raf) return;
       raf = window.requestAnimationFrame(() => {
         const y = window.scrollY;
+        const velocity = Math.max(-18, Math.min(18, y - previousY));
         const max = Math.max(document.documentElement.scrollHeight - window.innerHeight, 1);
         document.documentElement.style.setProperty("--scroll-shift", `${Math.min(y * 0.12, 115)}px`);
         document.documentElement.style.setProperty("--page-progress", `${(y / max) * 100}%`);
+        document.documentElement.style.setProperty("--ticker-skew", `${velocity * -0.22}deg`);
+        document.documentElement.style.setProperty("--scroll-velocity", `${velocity}`);
+        if (lookbookRef.current) {
+          const bounds = lookbookRef.current.getBoundingClientRect();
+          const distance = Math.max(lookbookRef.current.offsetHeight - window.innerHeight, 1);
+          const progress = Math.max(0, Math.min(1, -bounds.top / distance));
+          lookbookRef.current.style.setProperty("--look-progress", progress.toFixed(4));
+          const nextLook = Math.min(lookbookFrames.length - 1, Math.floor(progress * lookbookFrames.length));
+          setActiveLook((current) => (current === nextLook ? current : nextLook));
+        }
         setScrolled(y > 40);
+        previousY = y;
         raf = 0;
       });
     };
@@ -118,13 +521,84 @@ function App() {
   }, [loading]);
 
   useEffect(() => {
+    const target = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const current = { ...target };
+    let frame = 0;
     const onMove = (event) => {
+      target.x = event.clientX;
+      target.y = event.clientY;
+      document.documentElement.style.setProperty("--pointer-x", `${(event.clientX / window.innerWidth - 0.5).toFixed(3)}`);
+      document.documentElement.style.setProperty("--pointer-y", `${(event.clientY / window.innerHeight - 0.5).toFixed(3)}`);
+      document.documentElement.style.setProperty("--pointer-px", `${(event.clientX / window.innerWidth - 0.5) * 18}px`);
+      document.documentElement.style.setProperty("--pointer-py", `${(event.clientY / window.innerHeight - 0.5) * 14}px`);
+    };
+    const onPointerOver = (event) => {
       if (!cursorRef.current) return;
-      cursorRef.current.style.transform = `translate3d(${event.clientX}px, ${event.clientY}px, 0)`;
+      const targetElement = event.target.closest("[data-cursor]");
+      const label = cursorRef.current.querySelector("b");
+      if (label) label.textContent = targetElement?.dataset.cursor || "";
+      cursorRef.current.classList.toggle("has-label", Boolean(targetElement));
+    };
+    const follow = () => {
+      current.x += (target.x - current.x) * 0.16;
+      current.y += (target.y - current.y) * 0.16;
+      if (cursorRef.current) cursorRef.current.style.transform = `translate3d(${current.x}px, ${current.y}px, 0)`;
+      frame = window.requestAnimationFrame(follow);
     };
     window.addEventListener("pointermove", onMove, { passive: true });
-    return () => window.removeEventListener("pointermove", onMove);
+    window.addEventListener("pointerover", onPointerOver, { passive: true });
+    frame = window.requestAnimationFrame(follow);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerover", onPointerOver);
+    };
   }, []);
+
+  useEffect(() => {
+    const magnetics = [...document.querySelectorAll(".magnetic")];
+    const tilts = [...document.querySelectorAll(".tilt-card")];
+    const magneticMove = (event) => {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      event.currentTarget.style.setProperty("--mag-x", `${(event.clientX - bounds.left - bounds.width / 2) * 0.22}px`);
+      event.currentTarget.style.setProperty("--mag-y", `${(event.clientY - bounds.top - bounds.height / 2) * 0.22}px`);
+    };
+    const magneticLeave = (event) => {
+      event.currentTarget.style.setProperty("--mag-x", "0px");
+      event.currentTarget.style.setProperty("--mag-y", "0px");
+    };
+    const tiltMove = (event) => {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const x = (event.clientX - bounds.left) / bounds.width - 0.5;
+      const y = (event.clientY - bounds.top) / bounds.height - 0.5;
+      event.currentTarget.style.setProperty("--tilt-x", `${y * -5}deg`);
+      event.currentTarget.style.setProperty("--tilt-y", `${x * 7}deg`);
+      event.currentTarget.style.setProperty("--shine-x", `${(x + 0.5) * 100}%`);
+      event.currentTarget.style.setProperty("--shine-y", `${(y + 0.5) * 100}%`);
+    };
+    const tiltLeave = (event) => {
+      event.currentTarget.style.setProperty("--tilt-x", "0deg");
+      event.currentTarget.style.setProperty("--tilt-y", "0deg");
+    };
+    magnetics.forEach((element) => {
+      element.addEventListener("pointermove", magneticMove);
+      element.addEventListener("pointerleave", magneticLeave);
+    });
+    tilts.forEach((element) => {
+      element.addEventListener("pointermove", tiltMove);
+      element.addEventListener("pointerleave", tiltLeave);
+    });
+    return () => {
+      magnetics.forEach((element) => {
+        element.removeEventListener("pointermove", magneticMove);
+        element.removeEventListener("pointerleave", magneticLeave);
+      });
+      tilts.forEach((element) => {
+        element.removeEventListener("pointermove", tiltMove);
+        element.removeEventListener("pointerleave", tiltLeave);
+      });
+    };
+  }, [loading]);
 
   useEffect(() => {
     const locked = menuOpen || cartOpen || selectedProduct;
@@ -159,17 +633,43 @@ function App() {
     showToast("You’re on the list — welcome in.");
   };
 
+  const beginShowroomDrag = (event) => {
+    showroomDragRef.current = { active: true, moved: false, startX: event.clientX, startAngle: showroomAngle };
+    event.currentTarget.dataset.dragging = "true";
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const moveShowroom = (event) => {
+    if (!showroomDragRef.current.active) return;
+    const distance = event.clientX - showroomDragRef.current.startX;
+    if (Math.abs(distance) > 6) showroomDragRef.current.moved = true;
+    setShowroomAngle(showroomDragRef.current.startAngle + distance * 0.34);
+  };
+
+  const endShowroomDrag = (event) => {
+    if (!showroomDragRef.current.active) return;
+    showroomDragRef.current.active = false;
+    event.currentTarget.dataset.dragging = "false";
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setShowroomAngle((angle) => Math.round(angle / 90) * 90);
+  };
+
+  const rotateShowroom = (direction) => setShowroomAngle((angle) => Math.round(angle / 90) * 90 + direction * 90);
+
   return (
     <div className="site-shell">
       <style>{styles}</style>
+      <ThreeWorld />
+      <div className="three-hud" aria-hidden="true"><span>WEBGL / LIVE</span><i /><span>SCROLL TO MORPH</span></div>
 
       <div className={`loader ${loading ? "is-loading" : "is-done"}`} aria-hidden={!loading}>
-        <div className="loader-mark">N/F</div>
-        <div className="loader-line"><span /></div>
+        <div className="loader-top"><div className="loader-mark">N/F</div><strong>{String(loadCount).padStart(3, "0")}</strong></div>
+        <div className="loader-line"><span style={{ transform: `scaleX(${loadCount / 100})` }} /></div>
         <div className="loader-meta"><span>Independent uniform</span><span>Est. 2026</span></div>
       </div>
 
-      <div className="cursor" ref={cursorRef} aria-hidden="true"><span /></div>
+      <div className="site-grain" aria-hidden="true" />
+      <div className="cursor" ref={cursorRef} aria-hidden="true"><span /><b /></div>
       <div className="progress-line" aria-hidden="true" />
 
       <header className={`site-header ${scrolled ? "is-scrolled" : ""}`}>
@@ -180,11 +680,11 @@ function App() {
           <a href="#about">About</a>
         </nav>
         <div className="header-actions">
-          <button className="text-button" onClick={() => setCartOpen(true)}>
+          <button className="text-button magnetic" onClick={() => setCartOpen(true)}>
             Bag <span>[{String(cart.length).padStart(2, "0")}]</span>
           </button>
           <button
-            className="menu-button"
+            className="menu-button magnetic"
             onClick={() => setMenuOpen(true)}
             aria-label="Open menu"
           >
@@ -195,6 +695,7 @@ function App() {
 
       <main id="top">
         <section className="hero" aria-labelledby="hero-title">
+          <AmbientCanvas />
           <div className="hero-kicker hero-enter">
             <span>Drop 04 / Reconstructed essentials</span>
             <span>London — Everywhere</span>
@@ -203,15 +704,15 @@ function App() {
           <div className="hero-stage" aria-hidden="true">
             <div className="orbit orbit-one" />
             <div className="orbit orbit-two" />
-            <figure className="hero-frame frame-left">
+            <figure className="hero-frame frame-left tilt-card">
               <img src={editorialImages[0].src} alt="" />
               <figcaption>LOOK 04—A</figcaption>
             </figure>
-            <figure className="hero-frame frame-center">
+            <figure className="hero-frame frame-center tilt-card">
               <img src={editorialImages[1].src} alt="" />
               <figcaption>THE NEW UNIFORM</figcaption>
             </figure>
-            <figure className="hero-frame frame-right">
+            <figure className="hero-frame frame-right tilt-card">
               <img src={editorialImages[2].src} alt="" />
               <figcaption>OBJECT / FORM</figcaption>
             </figure>
@@ -222,8 +723,11 @@ function App() {
           </div>
 
           <div className="hero-bottom">
-            <h1 id="hero-title" className="hero-enter">Clothes for<br /><em>after now.</em></h1>
-            <a className="round-link hero-enter" href="#shop" aria-label="Explore collection">
+            <h1 id="hero-title">
+              <span className="hero-line"><span>Clothes for</span></span>
+              <span className="hero-line"><span><em>after now.</em></span></span>
+            </h1>
+            <a className="round-link magnetic" data-cursor="GO" href="#shop" aria-label="Explore collection">
               <span>Explore<br />collection</span><Arrow diagonal />
             </a>
           </div>
@@ -259,7 +763,7 @@ function App() {
           <div className="collection-grid">
             {products.slice(0, 3).map((product, index) => (
               <article className={`product-card product-${index + 1} reveal`} key={product.id}>
-                <button className="product-image" onClick={() => setSelectedProduct(product)} aria-label={`View ${product.name}`}>
+                <button className="product-image tilt-card" data-cursor="VIEW" onClick={() => setSelectedProduct(product)} aria-label={`View ${product.name}`}>
                   <img src={product.image} alt={product.alt} />
                   <span className="view-pill">Quick view <Arrow diagonal /></span>
                   <span className="image-index">0{index + 1}</span>
@@ -278,7 +782,7 @@ function App() {
         </section>
 
         <section className="campaign" id="campaign">
-          <div className="campaign-photo reveal">
+          <div className="campaign-photo reveal" data-cursor="FILM">
             <img
               src="https://images.unsplash.com/photo-1485230895905-ec40ba36b9bc?auto=format&fit=crop&w=1800&q=90"
               alt="Fashion editorial in a city setting"
@@ -289,25 +793,97 @@ function App() {
             <div className="section-label reveal"><span>03</span> The field study</div>
             <h2 className="reveal">No fixed<br /><em>address.</em></h2>
             <p className="reveal">A study of people in motion, photographed between the built world and the places it forgets.</p>
-            <button className="pill-button reveal" onClick={() => showToast("Campaign film coming soon")}>Watch the film <Arrow /></button>
+            <button className="pill-button magnetic reveal" onClick={() => showToast("Campaign film coming soon")}>Watch the film <Arrow /></button>
+          </div>
+        </section>
+
+        <section className="motion-lookbook" ref={lookbookRef} aria-label="Campaign lookbook">
+          <div className="lookbook-sticky">
+            <div className="lookbook-copy">
+              <div className="section-label"><span>04</span> Motion study</div>
+              <div className="lookbook-titles" aria-live="polite">
+                {lookbookFrames.map((frame, index) => (
+                  <div className={`lookbook-title ${index === activeLook ? "is-active" : ""}`} key={frame.title}>
+                    <small>{frame.subtitle}</small>
+                    <h2>{frame.title}</h2>
+                    <p>{frame.copy}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="lookbook-progress">
+                {lookbookFrames.map((frame, index) => (
+                  <span className={index <= activeLook ? "is-active" : ""} key={frame.number} />
+                ))}
+              </div>
+            </div>
+
+            <div className="lookbook-visual" data-cursor="SCROLL">
+              {lookbookFrames.map((frame, index) => (
+                <figure
+                  className={`lookbook-frame ${index === activeLook ? "is-active" : ""} ${index < activeLook ? "is-past" : ""}`}
+                  style={{ "--frame-index": index }}
+                  key={frame.title}
+                >
+                  <img src={frame.image} alt={frame.alt} />
+                  <figcaption><span>NF / {frame.number}</span><span>{frame.subtitle}</span></figcaption>
+                </figure>
+              ))}
+              <div className="lookbook-crosshair" aria-hidden="true"><i /><i /></div>
+              <div className="lookbook-count"><strong>0{activeLook + 1}</strong><span>/ 03</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section className="showroom" aria-labelledby="showroom-title">
+          <div className="showroom-head reveal">
+            <div className="section-label"><span>05</span> 360° object room</div>
+            <h2 id="showroom-title">Drag the<br /><em>collection.</em></h2>
+            <p>Four objects suspended in one continuous space. Drag to orbit, click to inspect.</p>
+          </div>
+          <div
+            className="showroom-stage"
+            data-cursor="DRAG"
+            data-dragging="false"
+            onPointerDown={beginShowroomDrag}
+            onPointerMove={moveShowroom}
+            onPointerUp={endShowroomDrag}
+            onPointerCancel={endShowroomDrag}
+          >
+            <div className="showroom-floor" aria-hidden="true" />
+            <div className="showroom-ring" style={{ "--ring-angle": `${showroomAngle}deg` }}>
+              {products.map((product, index) => (
+                <article className="showroom-card" style={{ "--card-angle": `${index * 90}deg` }} key={product.id}>
+                  <button onClick={() => { if (!showroomDragRef.current.moved) setSelectedProduct(product); }} aria-label={`Explore ${product.name}`}>
+                    <img src={product.image} alt={product.alt} draggable="false" />
+                    <span className="showroom-card-meta"><small>0{index + 1} / 04</small><strong>{product.name}</strong><b>£{product.price}</b></span>
+                  </button>
+                </article>
+              ))}
+            </div>
+            <div className="showroom-axis" aria-hidden="true"><i /><i /><span>N/F</span></div>
+          </div>
+          <div className="showroom-controls">
+            <button className="magnetic" onClick={() => rotateShowroom(-1)} aria-label="Rotate showroom left">←</button>
+            <span>Click + drag to rotate</span>
+            <button className="magnetic" onClick={() => rotateShowroom(1)} aria-label="Rotate showroom right">→</button>
           </div>
         </section>
 
         <section className="all-pieces section-pad" id="all-pieces">
           <div className="rail-heading reveal">
             <div>
-              <div className="section-label"><span>04</span> Objects to wear</div>
+              <div className="section-label"><span>06</span> Objects to wear</div>
               <h2>Edition / 04</h2>
             </div>
             <div className="rail-controls">
-              <button onClick={() => scrollProducts(-1)} aria-label="Previous products">←</button>
-              <button onClick={() => scrollProducts(1)} aria-label="Next products">→</button>
+              <button className="magnetic" onClick={() => scrollProducts(-1)} aria-label="Previous products">←</button>
+              <button className="magnetic" onClick={() => scrollProducts(1)} aria-label="Next products">→</button>
             </div>
           </div>
           <div className="product-rail reveal" ref={productRailRef}>
             {[...products, ...products.slice(0, 2)].map((product, index) => (
               <article className="rail-card" key={`${product.id}-${index}`}>
-                <button onClick={() => setSelectedProduct(product)} aria-label={`View ${product.name}`}>
+                <button className="tilt-card" data-cursor="VIEW" onClick={() => setSelectedProduct(product)} aria-label={`View ${product.name}`}>
                   <img src={product.image} alt={product.alt} />
                   <span>+</span>
                 </button>
@@ -318,7 +894,7 @@ function App() {
         </section>
 
         <section className="process section-pad">
-          <div className="section-label reveal"><span>05</span> How it is made</div>
+          <div className="section-label reveal"><span>07</span> How it is made</div>
           <div className="process-layout">
             <div className="process-intro reveal">
               <h2>Less, but<br /><em>far better.</em></h2>
@@ -345,13 +921,13 @@ function App() {
 
         <section className="newsletter section-pad">
           <div className="newsletter-orb" aria-hidden="true">04</div>
-          <div className="section-label reveal"><span>06</span> Keep in contact</div>
+          <div className="section-label reveal"><span>08</span> Keep in contact</div>
           <h2 className="reveal">The next thing<br />arrives <em>quietly.</em></h2>
           <form className="newsletter-form reveal" onSubmit={submitNewsletter}>
             <label htmlFor="email">Email address</label>
             <div>
               <input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@somewhere.com" required />
-              <button type="submit" aria-label="Join newsletter"><Arrow /></button>
+              <button className="magnetic" type="submit" aria-label="Join newsletter"><Arrow /></button>
             </div>
           </form>
         </section>
@@ -418,7 +994,7 @@ function App() {
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Syne:wght@400;500;600;700;800&display=swap');
 
-  :root { --ink:#101010; --paper:#f2f0e9; --lime:#dfff45; --soft:#dad8d0; --line:rgba(16,16,16,.18); --page-progress:0%; --scroll-shift:0px; }
+  :root { --ink:#101010; --paper:#f2f0e9; --lime:#dfff45; --soft:#dad8d0; --line:rgba(16,16,16,.18); --page-progress:0%; --scroll-shift:0px; --ticker-skew:0deg; --pointer-x:0; --pointer-y:0; --pointer-px:0px; --pointer-py:0px; --scroll-velocity:0; }
   * { box-sizing:border-box; }
   html { scroll-behavior:smooth; background:var(--paper); }
   body { margin:0; background:var(--paper); color:var(--ink); font-family:'DM Sans',sans-serif; cursor:none; }
@@ -428,18 +1004,34 @@ const styles = `
   a { text-decoration:none; }
   img { display:block; width:100%; }
   ::selection { background:var(--lime); color:#000; }
-  .site-shell { overflow:hidden; }
+  .site-shell { overflow:clip; position:relative; }
+  .three-world { position:fixed; z-index:3; inset:0; width:100%; height:100%; pointer-events:none; opacity:.72; filter:saturate(1.16) contrast(1.04); mask-image:radial-gradient(circle at 50% 48%,#000 0 34%,rgba(0,0,0,.92) 48%,transparent 78%); transition:opacity .5s; }
+  .three-world[data-webgl="unavailable"] { display:none; }
+  .three-hud { position:fixed; z-index:7; left:50%; top:92px; transform:translateX(-50%); display:flex; align-items:center; gap:8px; pointer-events:none; font-size:7px; letter-spacing:.16em; mix-blend-mode:difference; color:#fff; }
+  .three-hud i { width:5px; height:5px; border-radius:50%; background:var(--lime); box-shadow:0 0 0 4px rgba(223,255,69,.18); animation:livePulse 1.6s ease-in-out infinite; }
+  @keyframes livePulse { 50%{transform:scale(.5);opacity:.5} }
+  main>section { transform-style:preserve-3d; }
+  main>section>* { position:relative; z-index:5; }
+  .site-grain { position:fixed; z-index:450; inset:-25%; width:150%; height:150%; pointer-events:none; opacity:.065; background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E"); animation:grainShift .28s steps(2) infinite; mix-blend-mode:multiply; }
+  @keyframes grainShift { 0%{transform:translate3d(0,0,0)} 25%{transform:translate3d(2%,-3%,0)} 50%{transform:translate3d(-3%,2%,0)} 75%{transform:translate3d(3%,4%,0)} 100%{transform:translate3d(-2%,-4%,0)} }
   .progress-line { position:fixed; z-index:98; top:0; left:0; width:var(--page-progress); height:3px; background:var(--lime); pointer-events:none; }
-  .cursor { position:fixed; z-index:200; left:-18px; top:-18px; width:36px; height:36px; border:1px solid rgba(16,16,16,.55); border-radius:50%; pointer-events:none; transition:width .25s,height .25s,background .25s,border .25s; mix-blend-mode:difference; }
+  .cursor { position:fixed; z-index:480; left:-18px; top:-18px; width:36px; height:36px; border:1px solid rgba(16,16,16,.55); border-radius:50%; pointer-events:none; transition:width .35s cubic-bezier(.16,1,.3,1),height .35s cubic-bezier(.16,1,.3,1),left .35s,top .35s,background .25s,border .25s; mix-blend-mode:difference; display:grid; place-items:center; }
   .cursor span { position:absolute; width:4px; height:4px; background:#fff; border-radius:50%; top:15px; left:15px; }
-  body:has(a:hover,button:hover) .cursor { width:58px; height:58px; left:-29px; top:-29px; background:#fff; border-color:#fff; }
+  .cursor b { color:#000; font:600 9px 'DM Sans'; letter-spacing:.08em; opacity:0; transition:opacity .2s; }
+  .cursor.has-label { width:72px; height:72px; left:-36px; top:-36px; background:#fff; border-color:#fff; mix-blend-mode:normal; }
+  .cursor.has-label span { opacity:0; }
+  .cursor.has-label b { opacity:1; }
+  body:has(a:hover,button:hover) .cursor:not(.has-label) { width:58px; height:58px; left:-29px; top:-29px; background:#fff; border-color:#fff; }
+  .magnetic { --mag-x:0px; --mag-y:0px; transform:translate3d(var(--mag-x),var(--mag-y),0); transition:transform .45s cubic-bezier(.16,1,.3,1),background .3s,color .3s; }
+  .tilt-card { --tilt-x:0deg; --tilt-y:0deg; --shine-x:50%; --shine-y:50%; transform-style:preserve-3d; transition:transform .55s cubic-bezier(.16,1,.3,1); }
   .loader { position:fixed; inset:0; z-index:500; padding:26px 30px; background:var(--lime); display:flex; flex-direction:column; justify-content:space-between; transition:transform .85s cubic-bezier(.76,0,.24,1),visibility .85s; }
   .loader.is-done { transform:translateY(-105%); visibility:hidden; transition-delay:.05s; }
+  .loader-top { display:flex; justify-content:space-between; align-items:flex-start; }
+  .loader-top strong { font:500 clamp(36px,7vw,96px)/.8 'Syne'; letter-spacing:-.08em; }
   .loader-mark { font:700 clamp(58px,12vw,180px)/.8 'Syne'; letter-spacing:-.1em; }
   .loader-line { height:1px; background:rgba(0,0,0,.25); overflow:hidden; }
-  .loader-line span { display:block; width:100%; height:100%; background:#000; transform-origin:left; animation:loadLine 1.25s cubic-bezier(.76,0,.24,1); }
+  .loader-line span { display:block; width:100%; height:100%; background:#000; transform-origin:left; transition:transform .08s linear; }
   .loader-meta { display:flex; justify-content:space-between; text-transform:uppercase; font-size:11px; letter-spacing:.08em; }
-  @keyframes loadLine { from{transform:scaleX(0)} to{transform:scaleX(1)} }
 
   .site-header { position:fixed; z-index:100; top:16px; left:20px; right:20px; min-height:58px; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; padding:0 12px 0 18px; border-radius:18px; transition:background .35s,box-shadow .35s,backdrop-filter .35s; }
   .site-header.is-scrolled { background:rgba(242,240,233,.82); backdrop-filter:blur(16px); box-shadow:0 8px 30px rgba(0,0,0,.08); }
@@ -455,40 +1047,47 @@ const styles = `
   .menu-button i { width:5px; height:5px; background:#fff; border-radius:50%; transition:transform .25s; }
   .menu-button:hover i:nth-child(1),.menu-button:hover i:nth-child(4) { transform:scale(.4); }
 
-  .hero { position:relative; min-height:100svh; padding:100px 30px 22px; display:flex; flex-direction:column; justify-content:space-between; }
+  .hero { position:relative; min-height:100svh; padding:100px 30px 22px; display:flex; flex-direction:column; justify-content:space-between; isolation:isolate; }
+  .ambient-canvas { position:absolute; z-index:-1; inset:0; width:100%; height:100%; opacity:.9; }
   .hero-kicker { display:flex; justify-content:space-between; text-transform:uppercase; letter-spacing:.08em; font-size:10px; }
   .hero-stage { position:absolute; inset:105px 0 115px; }
   .orbit { position:absolute; border:1px solid rgba(16,16,16,.12); border-radius:50%; left:50%; top:48%; transform:translate(-50%,-50%); }
   .orbit-one { width:44vw; height:44vw; max-width:560px; max-height:560px; animation:orbitPulse 5s ease-in-out infinite; }
   .orbit-two { width:30vw; height:30vw; max-width:380px; max-height:380px; animation:orbitPulse 5s 1s ease-in-out infinite reverse; }
   @keyframes orbitPulse { 50%{transform:translate(-50%,-50%) scale(1.06);opacity:.45} }
-  .hero-frame { position:absolute; margin:0; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.13); transition:transform .8s cubic-bezier(.16,1,.3,1); }
+  .hero-frame { position:absolute; margin:0; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.13); transition:transform .65s cubic-bezier(.16,1,.3,1),box-shadow .65s; perspective:1000px; }
+  .hero-frame:hover { box-shadow:0 38px 90px rgba(0,0,0,.22); }
   .hero-frame img { height:100%; object-fit:cover; filter:saturate(.75); transition:transform .9s cubic-bezier(.16,1,.3,1),filter .5s; }
   .hero-frame:hover img { transform:scale(1.045); filter:saturate(1); }
   .hero-frame figcaption { position:absolute; bottom:8px; left:10px; font-size:9px; letter-spacing:.08em; background:rgba(242,240,233,.8); padding:4px 6px; }
-  .frame-left { width:20vw; height:29vw; max-height:410px; left:22%; top:24%; transform:translateY(calc(var(--scroll-shift) * -.35)) rotate(-8deg); z-index:1; }
-  .frame-center { width:22vw; height:31vw; max-height:440px; left:40%; top:4%; transform:translateY(calc(var(--scroll-shift) * -.7)) rotate(2deg); z-index:3; }
-  .frame-right { width:18vw; height:25vw; max-height:350px; right:20%; top:29%; transform:translateY(calc(var(--scroll-shift) * -.18)) rotate(9deg); z-index:2; }
+  .frame-left { width:20vw; height:29vw; max-height:410px; left:22%; top:24%; transform:translate3d(calc(var(--pointer-px) * -1),calc((var(--pointer-py) * -1) - (var(--scroll-shift) * .35)),0) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)) rotate(-8deg); z-index:1; }
+  .frame-center { width:22vw; height:31vw; max-height:440px; left:40%; top:4%; transform:translate3d(calc(var(--pointer-px) * .4),calc((var(--pointer-py) * .55) - (var(--scroll-shift) * .7)),0) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)) rotate(2deg); z-index:3; }
+  .frame-right { width:18vw; height:25vw; max-height:350px; right:20%; top:29%; transform:translate3d(calc(var(--pointer-px) * .8),calc((var(--pointer-py) * -.3) - (var(--scroll-shift) * .18)),0) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)) rotate(9deg); z-index:2; }
   .hero-sticker { position:absolute; z-index:5; width:102px; height:102px; border-radius:50%; background:var(--lime); left:61%; top:14%; display:flex; align-items:center; justify-content:center; gap:6px; animation:stickerFloat 3.2s ease-in-out infinite; }
   .hero-sticker span { font:700 23px 'Syne'; transform:rotate(-9deg); }
   .hero-sticker small { font-size:8px; text-transform:uppercase; line-height:1.1; }
   @keyframes stickerFloat { 50%{transform:translateY(-10px) rotate(4deg)} }
   .hero-bottom { position:relative; z-index:6; display:flex; align-items:flex-end; justify-content:space-between; }
   .hero h1 { margin:0; font:500 clamp(64px,8.8vw,148px)/.78 'Syne'; letter-spacing:-.09em; }
+  .hero-line { display:block; overflow:hidden; padding-right:.08em; }
+  .hero-line>span { display:block; transform:translateY(115%) rotate(3deg); transform-origin:left bottom; animation:lineRise 1.05s 1.48s forwards cubic-bezier(.16,1,.3,1); }
+  .hero-line:nth-child(2)>span { animation-delay:1.62s; }
+  @keyframes lineRise { to{transform:translateY(0) rotate(0)} }
   .hero h1 em,.section-head h2 i,.campaign-panel h2 em,.process-intro h2 em,.newsletter h2 em { font-family:Georgia,serif; font-weight:400; }
-  .round-link { width:126px; height:126px; border-radius:50%; padding:22px; background:var(--ink); color:#fff; display:flex; flex-direction:column; justify-content:space-between; font-size:11px; text-transform:uppercase; transition:transform .35s,background .35s,color .35s; }
+  .round-link { width:126px; height:126px; border-radius:50%; padding:22px; background:var(--ink); color:#fff; display:flex; flex-direction:column; justify-content:space-between; font-size:11px; text-transform:uppercase; transition:transform .45s cubic-bezier(.16,1,.3,1),background .35s,color .35s; animation:buttonBloom .8s 1.85s both cubic-bezier(.16,1,.3,1); }
+  @keyframes buttonBloom { from{opacity:0;transform:translate3d(var(--mag-x),30px,0) scale(.72) rotate(-20deg)} }
   .round-link svg { width:26px; align-self:flex-end; }
-  .round-link:hover { transform:rotate(8deg); background:var(--lime); color:#000; }
+  .round-link:hover { transform:translate3d(var(--mag-x),var(--mag-y),0) rotate(8deg); background:var(--lime); color:#000; }
   svg { fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
   .hero-enter { opacity:0; transform:translateY(34px); animation:heroIn .8s 1.45s forwards cubic-bezier(.16,1,.3,1); }
   .hero-bottom .hero-enter { animation-delay:1.6s; }
   @keyframes heroIn { to{opacity:1;transform:none} }
 
-  .ticker { overflow:hidden; border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:14px 0; background:var(--lime); transform:rotate(-1deg) scale(1.02); }
+  .ticker { overflow:hidden; border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:14px 0; background:var(--lime); transform:rotate(-1deg) scale(1.02) skewX(var(--ticker-skew)); transition:transform .18s ease-out; }
   .ticker-track { width:max-content; display:flex; align-items:center; gap:36px; font:600 15px 'Syne'; letter-spacing:.02em; animation:ticker 22s linear infinite; }
   .ticker-track b { font-size:18px; }
   @keyframes ticker { to{transform:translateX(-50%)} }
-  .section-pad { padding:130px 30px; }
+  .section-pad { padding:130px 30px; perspective:1600px; }
   .section-label { display:flex; gap:12px; align-items:center; font-size:10px; text-transform:uppercase; letter-spacing:.1em; }
   .section-label span { display:grid; place-items:center; width:28px; height:20px; border:1px solid currentColor; border-radius:50%; }
   .statement-grid { display:grid; grid-template-columns:4fr 1fr; gap:8vw; margin-top:90px; align-items:end; }
@@ -502,11 +1101,17 @@ const styles = `
   .section-head { display:grid; grid-template-columns:1fr 2fr 1fr; gap:30px; align-items:end; margin-bottom:80px; }
   .section-head h2,.rail-heading h2,.process-intro h2,.newsletter h2 { margin:0; font:500 clamp(58px,7.3vw,110px)/.86 'Syne'; letter-spacing:-.075em; }
   .section-head p { max-width:250px; font-size:13px; line-height:1.45; justify-self:end; }
-  .collection-grid { display:grid; grid-template-columns:1.35fr .8fr .8fr; gap:22px; align-items:start; }
-  .product-card { min-width:0; }
+  .collection-grid { display:grid; grid-template-columns:1.35fr .8fr .8fr; gap:22px; align-items:start; perspective:1500px; transform-style:preserve-3d; }
+  .product-card { min-width:0; transform-style:preserve-3d; --card-y:0deg; }
+  .product-card:nth-child(1) { --card-y:-2deg; }
+  .product-card:nth-child(2) { --card-y:3deg; }
+  .product-card:nth-child(3) { --card-y:-4deg; }
+  .product-card.is-visible:hover { transform:translate3d(0,-12px,44px) rotateY(var(--card-y)); }
   .product-2 { margin-top:15vw; }
   .product-3 { margin-top:5vw; }
-  .product-image { width:100%; padding:0; border:0; background:#ccc; position:relative; overflow:hidden; }
+  .product-image { width:100%; padding:0; border:0; background:#ccc; position:relative; overflow:hidden; transform:perspective(1200px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)); }
+  .product-image::after,.rail-card>button::after { content:''; position:absolute; inset:0; pointer-events:none; background:radial-gradient(circle at var(--shine-x) var(--shine-y),rgba(255,255,255,.26),transparent 36%); opacity:0; transition:opacity .35s; mix-blend-mode:soft-light; }
+  .product-image:hover::after,.rail-card>button:hover::after { opacity:1; }
   .product-1 .product-image { aspect-ratio:1.04; }
   .product-2 .product-image,.product-3 .product-image { aspect-ratio:.76; }
   .product-image img { height:100%; object-fit:cover; transition:transform .7s cubic-bezier(.16,1,.3,1),filter .4s; filter:saturate(.75); }
@@ -519,7 +1124,8 @@ const styles = `
   .product-info h3,.rail-card h3 { font-size:16px; font-weight:500; margin:0 0 5px; }
   .product-info p,.rail-card p { margin:0; font-size:10px; text-transform:uppercase; color:#5d5d59; }
   .product-info>span { font-size:13px; }
-  .large-link { display:flex; align-items:center; justify-content:space-between; margin-top:90px; padding:22px 0 12px; border-bottom:2px solid var(--ink); font:500 clamp(34px,5vw,72px) 'Syne'; letter-spacing:-.05em; }
+  .large-link { display:flex; align-items:center; justify-content:space-between; margin-top:90px; padding:22px 0 12px; border-bottom:2px solid var(--ink); font:500 clamp(34px,5vw,72px) 'Syne'; letter-spacing:-.05em; transform-style:preserve-3d; }
+  .large-link.is-visible:hover { transform:translate3d(0,-6px,35px) rotateX(-2deg); }
   .large-link svg { width:54px; transition:transform .35s; }
   .large-link:hover svg { transform:translateX(10px); }
 
@@ -535,6 +1141,67 @@ const styles = `
   .pill-button svg { width:18px; }
   .pill-button:hover { background:var(--lime); color:#000; border-color:var(--lime); }
 
+  .motion-lookbook { --look-progress:0; position:relative; height:340vh; background:#b9bec0; color:var(--ink); }
+  .lookbook-sticky { position:sticky; top:0; height:100vh; min-height:700px; display:grid; grid-template-columns:.82fr 1.18fr; padding:28px; overflow:hidden; }
+  .lookbook-sticky::before { content:'N/F—FIELD NOTES'; position:absolute; left:28px; bottom:20px; font:700 clamp(70px,12vw,190px)/.72 'Syne'; letter-spacing:-.09em; color:rgba(16,16,16,.07); white-space:nowrap; transform:translateX(calc(var(--look-progress) * -14vw)); }
+  .lookbook-copy { position:relative; z-index:3; display:flex; flex-direction:column; padding:18px 5vw 42px 2px; }
+  .lookbook-titles { position:relative; flex:1; display:flex; align-items:center; }
+  .lookbook-title { position:absolute; inset:auto 0; opacity:0; transform:translateY(45px); pointer-events:none; transition:opacity .6s,transform .7s cubic-bezier(.16,1,.3,1); }
+  .lookbook-title.is-active { opacity:1; transform:none; pointer-events:auto; }
+  .lookbook-title small { display:block; margin-bottom:12px; text-transform:uppercase; font-size:10px; letter-spacing:.12em; }
+  .lookbook-title h2 { margin:0; font:500 clamp(70px,10vw,150px)/.78 'Syne'; letter-spacing:-.09em; }
+  .lookbook-title p { max-width:330px; margin:32px 0 0; font-size:14px; line-height:1.5; }
+  .lookbook-progress { display:flex; gap:8px; }
+  .lookbook-progress span { flex:1; height:3px; background:rgba(16,16,16,.18); position:relative; overflow:hidden; }
+  .lookbook-progress span::after { content:''; position:absolute; inset:0; background:var(--ink); transform:scaleX(0); transform-origin:left; transition:transform .65s cubic-bezier(.16,1,.3,1); }
+  .lookbook-progress span.is-active::after { transform:scaleX(1); }
+  .lookbook-visual { position:relative; z-index:2; height:calc(100vh - 56px); min-height:644px; overflow:hidden; background:#8c9294; perspective:1300px; transform-style:preserve-3d; }
+  .lookbook-frame { position:absolute; inset:0; margin:0; clip-path:inset(100% 0 0 0); transform:translateZ(-150px) scale(1.08) rotateY(16deg) rotate(calc((var(--frame-index) - 1) * 1.5deg)); transform-origin:left center; transition:clip-path .9s cubic-bezier(.76,0,.24,1),transform 1.2s cubic-bezier(.16,1,.3,1),filter .7s; }
+  .lookbook-frame.is-active { clip-path:inset(0 0 0 0); transform:translateZ(0) scale(1) rotateY(0) rotate(0); z-index:2; }
+  .lookbook-frame.is-past { clip-path:inset(0 0 100% 0); transform:translateZ(-120px) scale(.92) rotateY(-18deg); transform-origin:right center; z-index:3; }
+  .lookbook-frame img { width:100%; height:100%; object-fit:cover; filter:grayscale(.85) contrast(1.06); transition:filter .8s,transform 1.8s cubic-bezier(.16,1,.3,1); }
+  .lookbook-frame.is-active img { filter:grayscale(.05) contrast(1.02); transform:scale(1.025); }
+  .lookbook-frame figcaption { position:absolute; z-index:2; left:16px; right:16px; bottom:14px; display:flex; justify-content:space-between; color:#fff; font-size:9px; text-transform:uppercase; letter-spacing:.1em; }
+  .lookbook-crosshair { position:absolute; z-index:5; left:50%; top:50%; width:82px; height:82px; border:1px solid rgba(255,255,255,.55); border-radius:50%; transform:translate(-50%,-50%) rotate(calc(var(--look-progress) * 180deg)); pointer-events:none; }
+  .lookbook-crosshair i { position:absolute; background:rgba(255,255,255,.55); }
+  .lookbook-crosshair i:first-child { width:112px; height:1px; left:-15px; top:40px; }
+  .lookbook-crosshair i:last-child { width:1px; height:112px; left:40px; top:-15px; }
+  .lookbook-count { position:absolute; z-index:6; top:15px; right:15px; width:84px; height:84px; border-radius:50%; background:var(--lime); display:grid; place-items:center; }
+  .lookbook-count strong { font:500 30px 'Syne'; letter-spacing:-.06em; }
+  .lookbook-count span { position:absolute; bottom:9px; font-size:8px; }
+
+  .showroom { position:relative; min-height:1100px; padding:105px 30px 45px; background:radial-gradient(circle at 50% 48%,#353535 0,#181818 45%,#0b0b0b 76%); color:#fff; overflow:hidden; perspective:1800px; }
+  .showroom::before { content:''; position:absolute; inset:0; background:linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px); background-size:6vw 6vw; transform:perspective(700px) rotateX(62deg) scale(1.7) translateY(18%); transform-origin:center bottom; opacity:.48; }
+  .showroom-head { display:grid; grid-template-columns:1fr 2fr 1fr; align-items:end; gap:30px; }
+  .showroom-head h2 { margin:0; font:500 clamp(70px,8.4vw,132px)/.8 'Syne'; letter-spacing:-.09em; text-align:center; }
+  .showroom-head h2 em { font-family:Georgia,serif; font-weight:400; }
+  .showroom-head>p { max-width:240px; margin:0 0 10px auto; color:#9d9d9d; font-size:12px; line-height:1.5; }
+  .showroom-stage { position:relative; height:690px; margin-top:20px; perspective:1500px; perspective-origin:50% 42%; touch-action:pan-y; user-select:none; cursor:grab; }
+  .showroom-stage[data-dragging="true"] { cursor:grabbing; }
+  .showroom-ring { position:absolute; left:50%; top:48%; width:min(25vw,350px); height:min(35vw,500px); transform-style:preserve-3d; transform:translate3d(-50%,-50%,0) rotateX(-7deg) rotateY(var(--ring-angle)); transition:transform .9s cubic-bezier(.16,1,.3,1); }
+  .showroom-stage[data-dragging="true"] .showroom-ring { transition:none; }
+  .showroom-card { position:absolute; inset:0; transform-style:preserve-3d; transform:rotateY(var(--card-angle)) translateZ(clamp(280px,32vw,500px)); backface-visibility:hidden; }
+  .showroom-card button { position:absolute; inset:0; width:100%; padding:0; border:1px solid rgba(255,255,255,.28); background:#222; overflow:hidden; box-shadow:0 34px 80px rgba(0,0,0,.45); transform:translateZ(0); transition:transform .45s cubic-bezier(.16,1,.3,1),box-shadow .45s; }
+  .showroom-card button:hover { transform:translateZ(28px) scale(1.025); box-shadow:0 45px 100px rgba(0,0,0,.6); }
+  .showroom-card img { width:100%; height:100%; object-fit:cover; filter:saturate(.7) contrast(1.06); pointer-events:none; transition:filter .5s,transform .8s; }
+  .showroom-card button:hover img { filter:saturate(1); transform:scale(1.035); }
+  .showroom-card-meta { position:absolute; inset:auto 0 0; padding:55px 14px 14px; display:grid; grid-template-columns:1fr auto; gap:5px; color:#fff; text-align:left; background:linear-gradient(transparent,rgba(0,0,0,.86)); }
+  .showroom-card-meta small { grid-column:1/-1; font-size:8px; letter-spacing:.12em; }
+  .showroom-card-meta strong { font:500 15px 'Syne'; }
+  .showroom-card-meta b { font-size:11px; font-weight:400; }
+  .showroom-floor { position:absolute; left:50%; top:60%; width:850px; height:850px; border:1px solid rgba(255,255,255,.11); border-radius:50%; transform:translate(-50%,-50%) rotateX(72deg) translateZ(-220px); box-shadow:inset 0 0 100px rgba(223,255,69,.07); }
+  .showroom-floor::before,.showroom-floor::after { content:''; position:absolute; border:1px solid rgba(255,255,255,.08); border-radius:50%; inset:16%; }
+  .showroom-floor::after { inset:34%; }
+  .showroom-axis { position:absolute; z-index:6; left:50%; top:48%; width:126px; height:126px; border:1px solid rgba(223,255,69,.6); border-radius:50%; transform:translate(-50%,-50%) translateZ(130px); display:grid; place-items:center; pointer-events:none; }
+  .showroom-axis i { position:absolute; background:rgba(223,255,69,.6); }
+  .showroom-axis i:first-child { width:170px; height:1px; }
+  .showroom-axis i:nth-child(2) { width:1px; height:170px; }
+  .showroom-axis span { display:grid; place-items:center; width:54px; height:54px; border-radius:50%; background:var(--lime); color:#000; font:700 12px 'Syne'; }
+  .showroom-controls { display:flex; justify-content:center; align-items:center; gap:18px; }
+  .showroom-controls button { width:48px; height:48px; border-radius:50%; border:1px solid #777; background:rgba(0,0,0,.2); color:#fff; }
+  .showroom-controls button:hover { background:var(--lime); color:#000; border-color:var(--lime); }
+  .showroom-controls span { font-size:9px; text-transform:uppercase; letter-spacing:.12em; }
+
   .rail-heading { display:flex; justify-content:space-between; align-items:end; margin-bottom:54px; }
   .rail-heading h2 { margin-top:45px; }
   .rail-controls { display:flex; gap:8px; }
@@ -543,7 +1210,7 @@ const styles = `
   .product-rail { display:flex; gap:18px; overflow:auto; scrollbar-width:none; scroll-snap-type:x mandatory; padding-right:20vw; }
   .product-rail::-webkit-scrollbar { display:none; }
   .rail-card { flex:0 0 min(31vw,420px); scroll-snap-align:start; }
-  .rail-card>button { width:100%; aspect-ratio:.78; padding:0; border:0; position:relative; overflow:hidden; background:#ddd; }
+  .rail-card>button { width:100%; aspect-ratio:.78; padding:0; border:0; position:relative; overflow:hidden; background:#ddd; transform:perspective(1200px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)); }
   .rail-card img { height:100%; object-fit:cover; transition:transform .6s; }
   .rail-card>button:hover img { transform:scale(1.04); }
   .rail-card>button span { position:absolute; right:12px; bottom:12px; width:38px; height:38px; display:grid; place-items:center; background:var(--paper); border-radius:50%; font-size:20px; }
@@ -554,13 +1221,14 @@ const styles = `
   .process-layout { display:grid; grid-template-columns:1fr 1.25fr; gap:10vw; margin-top:90px; }
   .process-intro { position:sticky; top:130px; align-self:start; }
   .process-intro p { max-width:390px; margin-top:35px; font-size:15px; line-height:1.5; }
-  .process-list { border-top:1px solid rgba(0,0,0,.3); }
+  .process-list { border-top:1px solid rgba(0,0,0,.3); perspective:1100px; transform-style:preserve-3d; }
   .process-item { position:relative; display:grid; grid-template-columns:50px 1fr 1.5fr 28px; gap:16px; padding:32px 0 58px; border-bottom:1px solid rgba(0,0,0,.3); }
   .process-item>span { font-size:10px; }
   .process-item h3 { margin:0; font:500 25px 'Syne'; }
   .process-item p { margin:0; font-size:12px; line-height:1.5; max-width:300px; }
   .process-item svg { width:22px; transition:transform .3s; }
   .process-item:hover svg { transform:rotate(45deg); }
+  .process-item.is-visible:hover { transform:translate3d(12px,-4px,32px) rotateY(-2deg); }
 
   .quote-block { min-height:92vh; background:var(--ink); color:#fff; padding:90px 30px 28px; display:flex; flex-direction:column; justify-content:space-between; }
   .quote-block>p { max-width:1200px; margin:0; font:400 clamp(56px,8.6vw,132px)/.92 'Syne'; letter-spacing:-.07em; }
@@ -575,8 +1243,9 @@ const styles = `
   .newsletter-form button { width:60px; border:0; background:transparent; }
   .newsletter-form svg { width:30px; }
 
-  footer { background:var(--ink); color:#fff; padding:55px 30px 22px; }
-  .footer-brand { font:700 clamp(90px,17vw,270px)/.67 'Syne'; letter-spacing:-.1em; }
+  footer { position:relative; z-index:8; background:var(--ink); color:#fff; padding:55px 30px 22px; perspective:1400px; }
+  .footer-brand { font:700 clamp(90px,17vw,270px)/.67 'Syne'; letter-spacing:-.1em; transform:rotateX(9deg) translateZ(35px); transform-origin:center bottom; transition:transform .8s cubic-bezier(.16,1,.3,1); }
+  .footer-brand:hover { transform:rotateX(0) translateZ(80px); }
   .footer-grid { margin:100px 0 65px; display:grid; grid-template-columns:repeat(3,1fr); width:55%; margin-left:auto; }
   .footer-grid div { display:flex; flex-direction:column; gap:8px; }
   .footer-grid span { color:#777; font-size:9px; text-transform:uppercase; margin-bottom:12px; }
@@ -636,13 +1305,15 @@ const styles = `
   .toast { position:fixed; z-index:400; left:50%; bottom:24px; transform:translate(-50%,100px); opacity:0; background:var(--ink); color:#fff; border-radius:999px; padding:14px 20px; display:flex; align-items:center; gap:10px; font-size:11px; transition:transform .4s,opacity .4s; }
   .toast.show { transform:translate(-50%,0); opacity:1; }
   .toast span { color:var(--lime); }
-  .reveal { opacity:0; transform:translateY(40px); transition:opacity .85s cubic-bezier(.16,1,.3,1),transform .85s cubic-bezier(.16,1,.3,1); }
+  .reveal { opacity:0; transform:translate3d(0,55px,-110px) rotateX(8deg); transform-origin:center bottom; transition:opacity .9s cubic-bezier(.16,1,.3,1),transform 1s cubic-bezier(.16,1,.3,1); }
   .reveal.is-visible { opacity:1; transform:none; }
 
   @media (max-width:900px) {
     body { cursor:auto; }
     button { cursor:pointer; }
     .cursor { display:none; }
+    .three-world { opacity:.52; mask-image:radial-gradient(circle at 50% 46%,#000 0 28%,rgba(0,0,0,.86) 48%,transparent 74%); }
+    .three-hud { top:82px; }
     .site-header { grid-template-columns:1fr auto; }
     .desktop-nav { display:none; }
     .hero { padding:92px 18px 18px; min-height:900px; }
@@ -667,6 +1338,28 @@ const styles = `
     .campaign-photo { height:70vh; margin:18px; }
     .campaign-panel { padding:90px 18px; }
     .campaign-panel h2 { margin:65px 0 35px; }
+    .motion-lookbook { height:300vh; }
+    .lookbook-sticky { display:block; padding:12px; min-height:100svh; }
+    .lookbook-copy { position:absolute; z-index:7; inset:0; padding:24px 24px 30px; color:#fff; pointer-events:none; }
+    .lookbook-copy>.section-label { mix-blend-mode:difference; }
+    .lookbook-titles { align-items:flex-end; padding-bottom:55px; }
+    .lookbook-title { bottom:55px; }
+    .lookbook-title h2 { font-size:18vw; }
+    .lookbook-title p { max-width:270px; margin-top:18px; font-size:12px; }
+    .lookbook-progress { position:absolute; left:24px; right:24px; bottom:25px; }
+    .lookbook-progress span { background:rgba(255,255,255,.3); }
+    .lookbook-progress span::after { background:#fff; }
+    .lookbook-visual { width:100%; height:calc(100vh - 24px); min-height:0; }
+    .lookbook-sticky::before { display:none; }
+    .lookbook-count { width:68px; height:68px; }
+    .showroom { min-height:950px; padding:90px 18px 35px; }
+    .showroom-head { grid-template-columns:1fr; text-align:left; }
+    .showroom-head h2 { text-align:left; font-size:14vw; }
+    .showroom-head>p { margin:0; }
+    .showroom-stage { height:590px; margin-top:5px; perspective:1000px; }
+    .showroom-ring { width:44vw; height:62vw; }
+    .showroom-card { transform:rotateY(var(--card-angle)) translateZ(38vw); }
+    .showroom-floor { width:580px; height:580px; }
     .rail-card { flex-basis:65vw; }
     .process-layout { grid-template-columns:1fr; }
     .process-intro { position:static; }
@@ -700,6 +1393,20 @@ const styles = `
     .campaign { min-height:0; }
     .campaign-photo { height:60vh; }
     .campaign-panel h2 { font-size:65px; }
+    .lookbook-title h2 { font-size:20vw; }
+    .lookbook-title p { max-width:235px; }
+    .lookbook-crosshair { width:60px; height:60px; }
+    .lookbook-crosshair i:first-child { width:82px; left:-11px; top:29px; }
+    .lookbook-crosshair i:last-child { height:82px; left:29px; top:-11px; }
+    .showroom { min-height:900px; }
+    .showroom-head h2 { font-size:17vw; }
+    .showroom-stage { height:560px; }
+    .showroom-ring { width:58vw; height:78vw; }
+    .showroom-card { transform:rotateY(var(--card-angle)) translateZ(52vw); }
+    .showroom-axis { width:86px; height:86px; }
+    .showroom-axis i:first-child { width:118px; }
+    .showroom-axis i:nth-child(2) { height:118px; }
+    .showroom-controls span { font-size:8px; }
     .rail-heading { align-items:center; }
     .rail-controls { display:none; }
     .rail-card { flex-basis:78vw; }
@@ -726,6 +1433,7 @@ const styles = `
     html { scroll-behavior:auto; }
     *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
     .reveal { opacity:1;transform:none; }
+    .three-world { opacity:.38; }
   }
 `;
 
